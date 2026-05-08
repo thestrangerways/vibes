@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser-arcade-physics.min.js"></script>
+    <style>
+        body { margin: 0; background: #050510; display: flex; justify-content: center; align-items: center; height: 100vh; }
+        canvas { border: 2px solid #00ffff; box-shadow: 0 0 20px #00ffff33; }
+    </style>
+</head>
+<body>
+
+<script>
+const config = {
+    type: Phaser.AUTO, width: 950, height: 750,
+    backgroundColor: '#050510', scene: { preload: preload, create: create }
+};
+
+const game = new Phaser.Game(config);
+
+// --- GLOBAL STATE ---
+let gameState = "START"; 
+let playerHull = 100;
+let enemyHull = 100;
+let credits = 100; 
+let currentSector = 1;
+let combatLogs = ["> STANDBY FOR SCAN..."];
+let activeSlots = [null, null, null]; 
+let isExecuting = false;
+let storeInventory = [];
+
+const catalog = [
+    { name: "OVERDRIVE.WAV", cost: 50, cards: [{n: "Hot-Atk", v: 7, t: "dmg"}, {n: "Hot-Atk", v: 7, t: "dmg"}] },
+    { name: "NANO_REPAIR.LOG", cost: 45, cards: [{n: "Nano-Fix", v: 4, t: "blk"}, {n: "Nano-Fix", v: 4, t: "blk"}] },
+    { name: "VOID_BASS.EXE", cost: 120, cards: [{n: "Void-Hit", v: 18, t: "dmg"}] },
+    { name: "BIT_CRUSH.ZIP", cost: 60, cards: [{n: "Crush", v: 5, t: "dmg"}, {n: "Crush", v: 5, t: "dmg"}, {n: "Crush", v: 5, t: "dmg"}] }
+];
+
+let shelf = [
+    { name: "ATTACK.EXE", cards: [{n: "Atk", v: 3, t: "dmg"}, {n: "Atk", v: 3, t: "dmg"}, {n: "Atk", v: 3, t: "dmg"}] },
+    { name: "SHIELD.SYS", cards: [{n: "Blk", v: 2, t: "blk"}, {n: "Blk", v: 2, t: "blk"}] }
+];
+
+let combatTempo = 3; 
+let cardsPerBeat = 4;
+let playDelay = 400; 
+
+function preload() {
+    // AUDIO FAIL-SAFE
+    this.load.on('loaderror', (file) => {
+        console.warn("Missing: " + file.key + ". Proceeding in silent mode.");
+    });
+
+    this.load.audio('title_theme', 'title_theme.mp3');
+    this.load.audio('battle_theme', 'battle_theme.mp3');
+}
+
+function create() {
+    this.refresh = () => drawUI(this);
+    
+    // Initialize Audio Objects
+    this.titleMusic = this.cache.audio.exists('title_theme') ? this.sound.add('title_theme', { volume: 0.4, loop: true }) : null;
+    this.battleMusic = this.cache.audio.exists('battle_theme') ? this.sound.add('battle_theme', { volume: 0.4, loop: true }) : null;
+
+    drawUI(this);
+}
+
+function drawUI(scene) {
+    scene.children.removeAll();
+    const style = { font: '14px Courier', fill: '#00ffff' };
+    const shelfStyle = { font: '11px Courier', fill: '#555588' };
+
+    if (gameState !== "START") {
+        scene.add.text(20, 20, `HULL: ${playerHull}%`, style);
+        scene.add.text(200, 20, `CREDITS: ${credits}`, { font: '14px Courier', fill: '#ffff00' });
+        scene.add.text(400, 20, `SECTOR: ${currentSector}`, style);
+    }
+
+    if (gameState === "START") {
+        scene.add.rectangle(475, 375, 600, 200, 0x000000).setStrokeStyle(4, 0x00ffff);
+        scene.add.text(475, 340, 'SOLARTAPE', { font: '84px Courier', fill: '#00ffff', fontWeight: 'bold', fontStyle: 'italic' }).setOrigin(0.5);
+        const startBtn = scene.add.rectangle(475, 520, 250, 50, 0x00ffff).setInteractive();
+        scene.add.text(475, 520, 'INITIALIZE BOOT', { font: '20px Courier', fill: '#000', fontWeight: 'bold' }).setOrigin(0.5);
+        
+        startBtn.on('pointerdown', () => {
+            // Unlock audio context for browser
+            if (scene.sound.context.state === 'suspended') {
+                scene.sound.context.resume();
+            }
+            gameState = "MAP";
+            if (scene.titleMusic && !scene.titleMusic.isPlaying) scene.titleMusic.play();
+            scene.refresh();
+        });
+    }
+
+    else if (gameState === "MAP") {
+        scene.add.text(475, 80, `[ NAVIGATION CHART ]`, { font: '20px Courier', fill: '#00ffff' }).setOrigin(0.5);
+        const nodes = ["COMBAT", "STORE", "SCAVENGE"];
+        nodes.forEach((type, i) => {
+            let x = 250 + (i * 220);
+            let color = type === "COMBAT" ? 0xff0055 : (type === "STORE" ? "#ffff00" : "#00ffff");
+            let node = scene.add.rectangle(x, 350, 140, 140, 0x000011).setStrokeStyle(2, color).setInteractive();
+            scene.add.text(x, 350, type, { font: '14px Courier', fill: color }).setOrigin(0.5);
+            
+            node.on('pointerdown', () => {
+                if (type === "COMBAT") {
+                    enemyHull = 40 + (currentSector * 15);
+                    gameState = "BATTLE";
+                    if (scene.titleMusic) scene.titleMusic.stop();
+                    if (scene.battleMusic) scene.battleMusic.play();
+                } else if (type === "STORE") {
+                    storeInventory = [...catalog].sort(() => 0.5 - Math.random()).slice(0, 3);
+                    gameState = "STORE";
+                } else {
+                    playerHull = Math.min(100, playerHull + 15);
+                    credits += 20;
+                    currentSector++;
+                    alert("SCAVENGE: +15 Hull, +20 Credits");
+                }
+                scene.refresh();
+            });
+        });
+    }
+
+    else if (gameState === "STORE") {
+        scene.add.rectangle(475, 375, 950, 750, 0x050510);
+        scene.add.text(475, 80, ">>> RECORD STORE <<<", { font: '24px Courier', fill: '#ffff00' }).setOrigin(0.5);
+        storeInventory.forEach((item, i) => {
+            let x = 200 + (i * 270);
+            scene.add.rectangle(x, 300, 220, 180, 0x1a1a2e).setStrokeStyle(2, 0xffff00);
+            scene.add.text(x, 230, item.name, { font: '14px Courier', fill: '#fff' }).setOrigin(0.5);
+            item.cards.forEach((c, ci) => {
+                scene.add.text(x, 260+(ci*15), `>${c.n} (${c.v})`, { font: '10px Courier', fill: '#00ffff' }).setOrigin(0.5);
+            });
+            scene.add.text(x, 340, `COST: ${item.cost}c`, { font: '16px Courier', fill: '#ffff00' }).setOrigin(0.5);
+            if (credits >= item.cost) {
+                let buyBtn = scene.add.rectangle(x, 420, 100, 30, 0xffff00).setInteractive();
+                scene.add.text(x, 420, "BUY", { font: '14px Courier', fill: '#000' }).setOrigin(0.5);
+                buyBtn.on('pointerdown', () => {
+                    credits -= item.cost;
+                    shelf.push(JSON.parse(JSON.stringify(item)));
+                    storeInventory.splice(i, 1);
+                    scene.refresh();
+                });
+            }
+        });
+        const leaveBtn = scene.add.rectangle(475, 600, 200, 50, 0x00ffff).setInteractive();
+        scene.add.text(475, 600, "LEAVE STORE", { font: '16px Courier', fill: '#000' }).setOrigin(0.5);
+        leaveBtn.on('pointerdown', () => { currentSector++; gameState = "MAP"; scene.refresh(); });
+    }
+
+    else if (gameState === "BATTLE") {
+        scene.add.rectangle(475, 375, 950, 750, 0x050510); 
+        scene.add.text(750, 20, `ENEMY: ${enemyHull}%`, { font: '14px Courier', fill: '#ff0055' });
+        scene.add.rectangle(475, 130, 600, 120, 0x000000).setStrokeStyle(1, 0x00ffff);
+        scene.logDisplay = scene.add.text(190, 85, combatLogs.slice(-5).join('\n'), { font: '12px Courier', fill: '#00ffff', lineSpacing: 4 });
+
+        activeSlots.forEach((cass, i) => {
+            let x = 200 + (i * 250);
+            scene.add.rectangle(x, 310, 180, 100, cass ? 0x1a1a4e : 0x050510).setStrokeStyle(2, 0x00ffff);
+            if (cass && !isExecuting) {
+                scene.add.text(x, 280, cass.name, style).setOrigin(0.5);
+                let ej = scene.add.rectangle(x, 330, 80, 25, 0xff0055).setInteractive();
+                scene.add.text(x, 330, "EJECT", { font: '11px Courier', fill: '#fff' }).setOrigin(0.5);
+                ej.on('pointerdown', () => { shelf.push(cass); activeSlots[i] = null; scene.refresh(); });
+            } else if (cass) { scene.add.text(x, 280, cass.name, style).setOrigin(0.5); }
+        });
+
+        scene.add.text(50, 400, "--- STORAGE ---", shelfStyle);
+        shelf.forEach((cass, i) => {
+            let x = 110 + (i * 170);
+            let item = scene.add.rectangle(x, 470, 150, 80, 0x1a1a2e).setStrokeStyle(1, 0x555588);
+            if (!isExecuting) {
+                item.setInteractive();
+                item.on('pointerdown', () => {
+                    let emptyIdx = activeSlots.indexOf(null);
+                    if (emptyIdx !== -1) {
+                        activeSlots[emptyIdx] = cass;
+                        shelf.splice(i, 1);
+                        scene.refresh();
+                    }
+                });
+            }
+            scene.add.text(x, 470, cass.name, { font: '10px Courier', fill: '#8888ff' }).setOrigin(0.5);
+        });
+
+        const atkBtn = scene.add.rectangle(475, 650, 200, 50, isExecuting ? 0x333333 : 0xff0055);
+        if (!isExecuting) atkBtn.setInteractive();
+        scene.add.text(475, 650, "EXECUTE BEAT", { font: '16px Courier', fill: '#fff', fontWeight: 'bold' }).setOrigin(0.5);
+        atkBtn.on('pointerdown', () => runCombatSequence(scene));
+    }
+
+    else if (gameState === "VICTORY") {
+        scene.add.rectangle(475, 375, 950, 750, 0x050510); 
+        scene.add.rectangle(475, 375, 500, 300, 0x000000).setStrokeStyle(2, 0x00ffff);
+        scene.add.text(475, 280, ">>> VICTORY <<<", { font: '32px Courier', fill: '#00ffff' }).setOrigin(0.5);
+        let earned = Math.floor(Math.random() * 20) + 40;
+        scene.add.text(475, 340, `CREDITS: +${earned}`, style).setOrigin(0.5);
+        const confirmBtn = scene.add.rectangle(475, 420, 200, 40, 0x00ffff).setInteractive();
+        scene.add.text(475, 420, 'PROCEED', { font: '16px Courier', fill: '#000' }).setOrigin(0.5);
+        confirmBtn.once('pointerdown', () => { 
+            credits += earned; 
+            currentSector++; 
+            gameState = "MAP"; 
+            if (scene.battleMusic) scene.battleMusic.stop();
+            if (scene.titleMusic && !scene.titleMusic.isPlaying) scene.titleMusic.play();
+            scene.refresh(); 
+        });
+    }
+}
+
+async function runCombatSequence(scene) {
+    isExecuting = true; scene.refresh();
+    for (let t = 0; t < combatTempo; t++) {
+        combatLogs.push(`>> BEAT ${t+1}`);
+        scene.logDisplay.setText(combatLogs.slice(-5).join('\n'));
+        let deck = [];
+        activeSlots.forEach(c => { if(c) deck.push(...c.cards); });
+        if (deck.length > 0) {
+            let subHand = deck.sort(() => Math.random() - 0.5).slice(0, cardsPerBeat);
+            for (let card of subHand) {
+                await new Promise(r => setTimeout(r, playDelay));
+                if (card.t === "dmg") enemyHull -= card.v;
+                else playerHull = Math.min(100, playerHull + card.v);
+                combatLogs.push(` > ${card.n}: ${card.v}`);
+                scene.logDisplay.setText(combatLogs.slice(-5).join('\n'));
+                scene.refresh();
+                if (enemyHull <= 0) break;
+            }
+        }
+        if (enemyHull <= 0) break;
+    }
+    if (enemyHull > 0) {
+        await new Promise(r => setTimeout(r, playDelay));
+        playerHull -= 8; combatLogs.push(`- FOE FIRE: -8`);
+    }
+    isExecuting = false;
+    if (enemyHull <= 0) { gameState = "VICTORY"; } 
+    else if (playerHull <= 0) { location.reload(); }
+    scene.refresh();
+}
+</script>
+
+</body>
+</html>
